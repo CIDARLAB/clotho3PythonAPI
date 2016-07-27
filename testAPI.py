@@ -1,8 +1,8 @@
 from random import random
-import phagebookAPI
+import clotho3API
 import time
 
-phagebook = phagebookAPI.Phagebook("cidarlab.org",9090)
+phagebook = clotho3API.Phagebook("cidarlab.org",9090)
 tempProjectID = 0
 tempOrderID = 0
 
