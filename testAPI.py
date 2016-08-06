@@ -2,20 +2,32 @@ from random import random
 import clotho3API
 import time
 
-phagebook = clotho3API.Phagebook("cidarlab.org",9090)
-tempProjectID = 0
-tempOrderID = 0
+clotho = clotho3API.Clotho()
+username = "1234@qwer.com"
+password = 1234
 
-start = time.time()
-phagebook.create_status("joonhohan365@gmail.com","12345","Weehee PB API Works! ID: %f" % random()).then(print)
-# phagebook.get_projects("joonhohan365@gmail.com","12345").then(print)
-# phagebook.get_project("joonhohan365@gmail.com","12345",tempProjectID).then(print)
-# phagebook.create_project_status("joonhohan365@gmail.com","12345",tempProjectID,"Project status # %f" % random()).then(print)
-# phagebook.get_orders("joonhohan365@gmail.com","12345").then(print)
-# phagebook.get_order("joonhohan365@gmail.com","12345",tempOrderID).then(print)
-# phagebook.change_ordering_status("joonhohan365@gmail.com","12345",tempOrderID,"Order status # %f" % random()).then(print)
+def projects_callback(data):
+    global username
+    global password
+    print("Received Projects: " + str(data))
+    clotho.get_project(username,password,data[0]["projectId"]).then(print)
+    clotho.create_project_status(username,password,data[0]["projectId"],"Project status # %f" % random()).then(print)
+
+def orders_callback(data):
+    global username
+    global password
+    print("Received Orders: " + str(data))
+    clotho.get_order(username,password,data[0]["orderId"]).then(print)
+    clotho.change_ordering_status(username, password, data[0]["orderId"], clotho.APPROVED).then(print)
 
 print("!!!!!!!! Start protocol !!!!!!!!!\n")
-phagebook.resolve_queue()
+start = time.time()
+
+clotho.create_status(username,password,"Weehee PB API Works! ID: %f" % random()).then(print)
+clotho.get_projects(username,password).then(projects_callback)
+clotho.get_orders(username,password).then(orders_callback)
+
+while clotho.clothoClient.socket.pendingRequests:
+    pass
 
 print('took %.2f seconds' % (time.time() - start))

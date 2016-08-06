@@ -1,10 +1,7 @@
-from selectors import DefaultSelector, EVENT_WRITE, EVENT_READ
 from twisted.internet import defer
-from logging import error, debug
-import socket
+import websocket
+import threading
 import json
-# Import twisted API for deferred object (download with pip by doing [sudo pip3 install twisted]).
-# If you do not know what twisted or asynchronous programming is, look it up.
 
 class Q_Deferred:
     def __init__(self):
@@ -19,43 +16,80 @@ class Q_Deferred:
     def callback(self, result=None):
         self.d.callback(result)
 
-class Client:
-    def __init__(self, serverURL, port=80):
-        self.serverURL = serverURL
-        self.port = port
-        self.selector = DefaultSelector()
-        self.pendingRequests = 0
+class ClientWebSocket:
+    def __init__(self, serverURL):
         self.requestId = -1  # A number that will be associated with each socket channel request (ask Prashant
                         # about this concept)
-        self.callBackHash = {}  # We are using async programming. This is where we store the callbacks
-                           # to process the retrieved info
-        # self.messageCache = []
-        # '''Asynchronous programming is usually single-threaded so the WebSocket will not send
-        #     info until it opens connection or is ready to send. In the off chance the user writes a script that
-        #     sends info before socket is ready, handle this by storing those calls here (if any are made) and
-        #     executing them in 'connectionMade'.'''
+        def _on_message(ws, message):
+            print("Message received")
+            try:
+                mappedData = json.loads(message)
+                received_item_checklist = {
+                    "channel"  :mappedData.get("channel"),
+                    "requestId":mappedData.get("requestId"),
+                    "data"     :mappedData.get("data")
+                }
+                for category in list(received_item_checklist.keys()):
+                    if received_item_checklist[category] is None:  # a.k.a. data missing
+                        print("ERROR _no_data_is_missing_in: data from server does not contain %s", category)
+                        return
+
+                callback = ws.callBackHash[mappedData["channel"] + str(mappedData["requestId"])]
+                callback(mappedData["data"])  # Undefined callbacks simply won't be executed
+            except:
+                print("ERROR _on_messssage: Unable to map received data to dictionary (%s)" % message)
+
+            ws.pendingRequests -= 1
+            if ws.pendingRequests is 0:
+                ws.close()
+
+        def _on_error(ws, error):
+            print("_on_error:" + str(error))
+
+        def _on_close(ws):
+            print("### closed ###")
+
+        def _on_open(ws):
+            print("Connection opened")
+            ws.attempting = False
+            for each_message in ws.messageCache:
+                ws.send(each_message.encode())
+            ws.messageCache.clear()
+
+        self.socket = websocket.WebSocketApp(serverURL,
+                                on_message=_on_message,
+                                on_error=_on_error,
+                                on_close=_on_close,
+                                on_open=_on_open)
+        self.socket.attempting = False
+        self.socket.pendingRequests = 0
+        self.socket.callBackHash = {}  
+        # ^ We are using async programming. This is where we store the callbacks
+        # to process the retrieved info
+        self.socket.messageCache = [] 
+        # ^ Socket communications will be run on a separate thread
+        # Since the socket may take time to open, we will cache the messages here so that
+        # it sends the messages when the socket opens. This allows to do someting else while waiting for the socket to open.
+
+
+    def _send_when_ready(self, message):
+        self.socket.pendingRequests += 1
+        try:
+            self.socket.send(message.encode())
+        except websocket.WebSocketException as e: # Socket isn't open. open it. Attempt to open it only once
+            print("Caching message: " + message)
+            if not self.socket.attempting:
+                threading._start_new_thread(self.socket.run_forever, ())
+                self.socket.attempting = True
+            self.socket.messageCache.append(message)
+
 
     def _new_request_id(self):
         self.requestId += 1
         return self.requestId
 
-    # People can call "addCallBack(functionName)" to the returned deferred to
-    # process received data later from the server.
-    # The 'functionName' is a function that handles received data. Data type depends on protocol.
-    def queue(self, channel, data, options=None):
-        s = socket.socket()
-        s.setblocking(False)
-        try:
-            s.connect((self.serverURL,self.port))
-        except BlockingIOError:
-            # This will always occur simply because blocking is disabled,
-            # despite socket connections always requiring blocking (waiting for connection).
-            pass
-        except:
-            print("queue: Unidentified exception while trying to use socket")
-            return Q_Deferred()
 
-        # Formatting data that's to be sent.
+    def emit(self, channel, data, options=None):
         requestId = self._new_request_id()
         message = {
             "channel": channel,
@@ -64,102 +98,9 @@ class Client:
         }
         if options is not None:
             message["options"] = options
-        message = json.dumps(message)  # stringified JSON
+        message = json.dumps(message)
 
-        # Pause with socket protocol. Instead, queue it in selector.
-        callback = lambda: self._on_open(s, message)
-        self.selector.register(s.fileno(), EVENT_WRITE, callback)
-        self.pendingRequests += 1
-
-        deferred = Q_Deferred()  # Create user callback register
-        self.callBackHash[channel + str(requestId)] = deferred.callback
-
+        deferred = Q_Deferred()
+        self.socket.callBackHash[channel + str(requestId)] = deferred.callback
+        self._send_when_ready(message)  # send here so users have time to add callback on deferred
         return deferred  # Google/Youtube it if you don't know what deferred is
-
-    def resolve_queue(self):
-        while self.pendingRequests is not None:
-            events = self.selector.select()
-            for key, mask in events:
-                event_handler = key.data
-                event_handler()
-
-    def _on_open(self, s, outgoing_message):
-        print("Connection opened")
-        self.selector.unregister(s.fileno())
-
-        s.send(outgoing_message.encode())  # byte string message
-
-        # now register to listen for a message
-        receive_buffer = []
-        callback = lambda: self._on_message(s, receive_buffer)
-        self.selector.register(s.fileno(), EVENT_READ, callback)
-
-    def _no_data_is_missing_in(self,mappedData):
-        received_item_checklist = {
-            "channel"  :mappedData.get("channel"),
-            "requestId":mappedData.get("requestId"),
-            "data"     :mappedData.get("data")
-        }
-        for category in list(received_item_checklist.keys()):
-            if received_item_checklist[category] is None:  # a.k.a. missing
-                print("_no_data_is_missing_in: data from server does not contain %s", category)
-                return False
-        return True
-
-    def _on_message(self, s, buffer):
-        print("Message received")
-        self.selector.unregister(s.fileno())
-        chunk = s.recv(1000)
-        if chunk:   # still have something to receive
-            buffer.append(chunk)
-            callback = lambda: self._on_message(s, buffer)
-            self.selector.register(s.fileno(), EVENT_READ, callback)
-        else:
-            # done receiving. parse the message
-            print("Done receiving")
-            try:
-                mappedData = json.loads((b''.join(buffer)).decode())
-                if self._no_data_is_missing_in(mappedData):
-                    callback = self.callBackHash[mappedData["channel"] + str(mappedData["requestId"])]
-                    callback(mappedData["data"])  # Undefined callbacks simply won't be executed
-            except:
-                print("_on_message: Unable to map received data to dictionary")
-            self.pendingRequests -= 1
-
-#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
-#         Helper Functions to handle deferred objects       #
-#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
-# def _send_when_ready(client, channel, data, options):
-#     return client.emit(channel, data, options)
-#
-# def _add_callback(deferred, callback):
-#     return deferred.addCallBack(callback)
-#
-# def _add_errback(deferred, errback):
-#     return deferred.addErrBack(errback)
-
-#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
-#      Master Object that creates connection to server      #
-#   #   #   #   #   #   #   #   #   #   #   #   #   #   #   #
-# class ServerConnection:
-#     def __init__(self, serverURL, port=80):
-#         self.serverURL = serverURL
-#         self.port = port
-#
-#     def emit(self, channel, data, options=None):
-#         if type(data) is not dict:
-#             self.incoming_connection = defer.Deferred()
-#             error("CidarAPI interface: data emitted must be dictionary")
-#             return self
-#         cidar_client = TCP4ClientEndpoint(reactor, self.serverURL, self.port)
-#         self.incoming_connection = cidar_client.connect(CidarFactory())
-#         self.incoming_connection.addCallback(_send_when_ready, channel, data, options)
-#         return self
-#
-#     def then(self, callback):
-#         self.incoming_connection.addCallback(_add_callback,callback)
-#         return self
-#
-#     def handle_error_with(self, errback):
-#         self.incoming_connection.addCallback(_add_errback,errback)
-#         return self
