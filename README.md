@@ -18,7 +18,7 @@ A normal desktop program executes functions/instructions one after another assum
 ### Requirements
 + **Twisted API:** Download to your python3 directory using pip3 `sudo pip3 install twisted` 
 
-+ **websocket-client 0.37.0:** Download to your python3 directory using pip3 `sudo pip3 install websocket-client` 
++ **websocket-client 0.37.0:** Download to your python3 directory using pip3 `sudo pip3 install websocket-client`
 
 + **clotho3API.py:** Download the Clotho API and import it to your module.
     

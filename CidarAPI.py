@@ -47,7 +47,7 @@ class ClientWebSocket:
             print("_on_error:" + str(error))
 
         def _on_close(ws):
-            print("### closed ###")
+            print("### Cidar Socket closed.")
 
         def _on_open(ws):
             print("Connection opened")
